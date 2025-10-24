@@ -162,6 +162,7 @@ namespace SchoolApp.Controllers
             return Ok(users);
         }
 
+
         [HttpGet("{id}")]
         [Authorize]
         public IActionResult GetUser(int id)
