@@ -42,7 +42,7 @@ namespace SchoolApp.Controllers
                 {
                     cmd.Parameters.AddWithValue("@Name", user.Name);
                     cmd.Parameters.AddWithValue("@DOB", (object?)user.Dob ?? DBNull.Value);
-                    cmd.Parameters.AddWithValue("@Age", user.Age);
+                    cmd.Parameters.AddWithValue("@Age", (object?)user.Age ?? DBNull.Value);
                     cmd.Parameters.AddWithValue("@Department", (object?)user.Department ?? DBNull.Value);
                     cmd.Parameters.AddWithValue("@Designation", (object?)user.Designation ?? DBNull.Value);
                     cmd.Parameters.AddWithValue("@Email", user.Email);
@@ -120,7 +120,7 @@ namespace SchoolApp.Controllers
                 SigningCredentials = new SigningCredentials(new SymmetricSecurityKey(key), SecurityAlgorithms.HmacSha256Signature)
             };
             var token = tokenHandler.CreateToken(tokenDescriptor);
-            return Ok(new { token = tokenHandler.WriteToken(token), role = user.Role, name = user.Name });
+            return Ok(new { id = user.Id, token = tokenHandler.WriteToken(token), role = user.Role, name = user.Name });
         }
 
         [HttpGet]
@@ -130,7 +130,7 @@ namespace SchoolApp.Controllers
             var users = new List<User>();
             using (var conn = new SqlConnection(_connectionString))
             {
-                var query = "SELECT * FROM Users";
+                var query = "SELECT * FROM Users WHERE IsActive = 1";
                 using (var cmd = new SqlCommand(query, conn))
                 {
                     conn.Open();
@@ -194,6 +194,7 @@ namespace SchoolApp.Controllers
                                 Designation = reader["Designation"].ToString(),
                                 Phonenumber = reader["PhoneNumber"].ToString(),
                                 Address = reader["Address"].ToString(),
+                                Profileimageurl = reader["ProfileImageUrl"]?.ToString(),
                                 Isactive = reader["IsActive"] != DBNull.Value ? (bool)reader["IsActive"] : true
                             };
                         }
@@ -207,36 +208,91 @@ namespace SchoolApp.Controllers
 
         [HttpPut("{id}")]
         [Authorize(Roles = "Teacher")]
-        public IActionResult PutUser(int id, [FromBody] User updatedUser)
+        public IActionResult UpdateUser(int id, [FromBody] UserUpdateRequest update)
         {
             using (var conn = new SqlConnection(_connectionString))
             {
-                var query = @"UPDATE Users SET 
-                              Name=@Name, DOB=@DOB, Age=@Age, Department=@Department, Designation=@Designation,
-                              Email=@Email, PhoneNumber=@PhoneNumber, Address=@Address, PasswordHash=@PasswordHash, Role=@Role
-                              WHERE Id=@Id";
-
-                using (var cmd = new SqlCommand(query, conn))
+                conn.Open();
+                User? existingUser = null;
+                var selectQuery = "SELECT * FROM Users WHERE Id = @Id AND IsActive = 1";
+                using (var selectCmd = new SqlCommand(selectQuery, conn))
                 {
-                    cmd.Parameters.AddWithValue("@Id", id);
-                    cmd.Parameters.AddWithValue("@Name", (object?)updatedUser.Name ?? DBNull.Value);
-                    cmd.Parameters.AddWithValue("@DOB", (object?)updatedUser.Dob ?? DBNull.Value);
-                    cmd.Parameters.AddWithValue("@Age", updatedUser.Age);
-                    cmd.Parameters.AddWithValue("@Department", (object?)updatedUser.Department ?? DBNull.Value);
-                    cmd.Parameters.AddWithValue("@Designation", (object?)updatedUser.Designation ?? DBNull.Value);
-                    cmd.Parameters.AddWithValue("@Email", (object?)updatedUser.Email ?? DBNull.Value);
-                    cmd.Parameters.AddWithValue("@PhoneNumber", (object?)updatedUser.Phonenumber ?? DBNull.Value);
-                    cmd.Parameters.AddWithValue("@Address", (object?)updatedUser.Address ?? DBNull.Value);
-                    cmd.Parameters.AddWithValue("@PasswordHash", (object?)updatedUser.Passwordhash ?? DBNull.Value);
-                    cmd.Parameters.AddWithValue("@Role", updatedUser.Role);
+                    selectCmd.Parameters.AddWithValue("@Id", id);
+                    using (var reader = selectCmd.ExecuteReader())
+                    {
+                        if (reader.Read())
+                        {
+                            existingUser = new User
+                            {
+                                Id = (int)reader["Id"],
+                                Role = reader["Role"].ToString(),
+                                Email = reader["Email"].ToString()
+                            };
+                        }
+                    }
+                }
+                if (existingUser == null)
+                {
+                    return NotFound(new { message = "User not found" });
+                }
 
-                    conn.Open();
-                    cmd.ExecuteNonQuery();
+                var emailCheckQuery = "SELECT COUNT(*) FROM Users WHERE Email = @Email AND Id != @Id AND IsActive = 1";
+                using (var emailCmd = new SqlCommand(emailCheckQuery, conn))
+                {
+                    emailCmd.Parameters.AddWithValue("@Email", update.Email ?? (object)DBNull.Value);
+                    emailCmd.Parameters.AddWithValue("@Id", id);
+                    int count = (int)emailCmd.ExecuteScalar();
+                    if (count > 0)
+                    {
+                        return BadRequest(new { message = "Email already exists for another user" });
+                    }
+                }
+                var updateQuery = @"UPDATE Users 
+                            SET Name = @Name, 
+                                Email = @Email, 
+                                Dob = @Dob,
+                                Gender = @Gender,
+                                Department = @Department, 
+                                Designation = @Designation, 
+                                PhoneNumber = @PhoneNumber, 
+                                Address = @Address,
+                                ProfileImageUrl = @ProfileImageUrl,
+                                UpdatedAt = @UpdatedAt" +
+                                        (string.IsNullOrEmpty(update.PasswordHash)
+                                            ? ""
+                                            : ", PasswordHash = @PasswordHash") +
+                                        " WHERE Id = @Id";
+
+                using (var updateCmd = new SqlCommand(updateQuery, conn))
+                {
+                    updateCmd.Parameters.AddWithValue("@Id", id);
+                    updateCmd.Parameters.AddWithValue("@Name", (object?)update.Name ?? DBNull.Value);
+                    updateCmd.Parameters.AddWithValue("@Email", (object?)update.Email ?? DBNull.Value);
+                    updateCmd.Parameters.AddWithValue("@Dob", update.Dob.HasValue ? update.Dob.Value.ToDateTime(TimeOnly.MinValue) : (object)DBNull.Value);
+                    updateCmd.Parameters.AddWithValue("@Gender", (object?)update.Gender ?? DBNull.Value);
+                    updateCmd.Parameters.AddWithValue("@Department", (object?)update.Department ?? DBNull.Value);
+                    updateCmd.Parameters.AddWithValue("@Designation", (object?)update.Designation ?? DBNull.Value);
+                    updateCmd.Parameters.AddWithValue("@PhoneNumber", (object?)update.Phonenumber ?? DBNull.Value);
+                    updateCmd.Parameters.AddWithValue("@Address", (object?)update.Address ?? DBNull.Value);
+                    updateCmd.Parameters.AddWithValue("@ProfileImageUrl", (object?)update.ProfileImageUrl ?? DBNull.Value);
+                    updateCmd.Parameters.AddWithValue("@UpdatedAt", DateTime.UtcNow);
+
+                    if (!string.IsNullOrEmpty(update.PasswordHash))
+                    {
+                        updateCmd.Parameters.AddWithValue("@PasswordHash", update.PasswordHash);
+                    }
+
+                    int rowsAffected = updateCmd.ExecuteNonQuery();
+                    if (rowsAffected == 0)
+                    {
+                        return NotFound(new { message = "Update failed" });
+                    }
                 }
             }
 
-            return NoContent();
+            return Ok(new { message = "User updated successfully" });
         }
+
 
         [HttpDelete("{id}")]
         [Authorize(Roles = "Teacher")]
